@@ -12,6 +12,36 @@ declare global {
   }
 }
 
+const renderMarkdown = (text: string) => {
+  const formatInline = (text: string) => {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em class="text-gray-300">$1</em>')
+      .replace(/`(.*?)`/g, '<code class="bg-gray-800 text-green-400 px-1 py-0.5 rounded text-sm">$1</code>');
+  };
+
+  return text
+    .split('\n')
+    .map((line, index) => {
+      if (line.startsWith('# ')) {
+        return <h1 key={index} className="text-2xl font-bold mb-3 text-blue-400" dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }} />;
+      }
+      if (line.startsWith('## ')) {
+        return <h2 key={index} className="text-xl font-bold mb-2 text-blue-300" dangerouslySetInnerHTML={{ __html: formatInline(line.slice(3)) }} />;
+      }
+      if (line.startsWith('### ')) {
+        return <h3 key={index} className="text-lg font-semibold mb-2 text-blue-200" dangerouslySetInnerHTML={{ __html: formatInline(line.slice(4)) }} />;
+      }
+      if (line.startsWith('- ')) {
+        return <li key={index} className="ml-4 mb-1 text-gray-300" dangerouslySetInnerHTML={{ __html: '• ' + formatInline(line.slice(2)) }} />;
+      }
+      if (line.trim() === '') {
+        return <div key={index} className="h-2" />;
+      }
+      return <p key={index} className="mb-2 text-gray-100 leading-relaxed" dangerouslySetInnerHTML={{ __html: formatInline(line) }} />;
+    });
+};
+
 export default function Home() {
   const editorRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLInputElement>(null);
@@ -41,6 +71,8 @@ for i in range(10):
   });
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
   const [renameInput, setRenameInput] = useState('');
+  const [showNewFileModal, setShowNewFileModal] = useState(false);
+  const [fileTypeSearch, setFileTypeSearch] = useState('');
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
@@ -104,26 +136,32 @@ for i in range(10):
 
   useEffect(() => {
     if (editorRef.current) {
+      const isPythonFile = selectedFile.endsWith('.py');
+      const extensions = [
+        basicSetup,
+        oneDark,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const newContent = update.state.doc.toString();
+            setFileContents(prev => ({
+              ...prev,
+              [selectedFile]: newContent
+            }));
+          }
+        }),
+        EditorView.theme({
+          "&": { height: "100%", width: "100%" },
+          ".cm-scroller": { height: "100%" },
+        }),
+      ];
+
+      if (isPythonFile) {
+        extensions.splice(1, 0, python());
+      }
+
       const startState = EditorState.create({
         doc: fileContents[selectedFile] || '',
-        extensions: [
-          basicSetup,
-          python(),
-          oneDark,
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              const newContent = update.state.doc.toString();
-              setFileContents(prev => ({
-                ...prev,
-                [selectedFile]: newContent
-              }));
-            }
-          }),
-          EditorView.theme({
-            "&": { height: "100%", width: "100%" },
-            ".cm-scroller": { height: "100%" },
-          }),
-        ],
+        extensions,
       });
 
       const view = new EditorView({
@@ -417,15 +455,7 @@ sys.modules['builtins'].input = mock_input
           <h2 className="text-white text-lg font-semibold mb-2">Files</h2>
           <button
             className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded"
-            onClick={() => {
-              const newFileName = `file${files.length + 1}.py`;
-              setFiles(prev => [...prev, newFileName]);
-              setFileContents(prev => ({
-                ...prev,
-                [newFileName]: ''
-              }));
-              setSelectedFile(newFileName);
-            }}
+            onClick={() => setShowNewFileModal(true)}
           >
             + New File
           </button>
@@ -486,8 +516,20 @@ sys.modules['builtins'].input = mock_input
       </div>
 
       <div className="flex-1 flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-600">
+          <span className="text-white text-sm font-medium">{selectedFile}</span>
+        </div>
         <div ref={containerRef} className="flex-1 flex flex-col">
-          <div ref={editorRef} className="flex-1" />
+          {selectedFile.endsWith('.md') ? (
+            <div className="flex flex-1">
+              <div ref={editorRef} className="flex-1 border-r border-gray-600" style={{ background: '#1e1e1e' }} />
+              <div className="flex-1 p-4 bg-gray-900 text-gray-100 overflow-y-auto">
+                {renderMarkdown(fileContents[selectedFile] || '')}
+              </div>
+            </div>
+          ) : (
+            <div ref={editorRef} className="flex-1" />
+          )}
           <div
             className="bg-gray-700 hover:bg-gray-600 cursor-row-resize select-none flex items-center justify-center text-gray-400 text-xs"
             style={{ height: '4px' }}
@@ -521,6 +563,77 @@ sys.modules['builtins'].input = mock_input
           </div>
         </div>
       </div>
+
+      {showNewFileModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 max-w-full mx-4">
+            <h3 className="text-white text-lg font-semibold mb-4">Create New File</h3>
+
+            <input
+              type="text"
+              placeholder="Search file types..."
+              value={fileTypeSearch}
+              onChange={(e) => setFileTypeSearch(e.target.value)}
+              className="w-full bg-gray-700 text-white rounded px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-blue-500"
+            />
+
+            <div className="space-y-2 mb-4">
+              {['.py', '.md', '.txt'].filter(type =>
+                fileTypeSearch === '' ||
+                type.toLowerCase().includes(fileTypeSearch.toLowerCase()) ||
+                (type === '.py' && 'python'.includes(fileTypeSearch.toLowerCase())) ||
+                (type === '.md' && 'markdown'.includes(fileTypeSearch.toLowerCase())) ||
+                (type === '.txt' && 'text'.includes(fileTypeSearch.toLowerCase()))
+              ).map((fileType) => (
+                <button
+                  key={fileType}
+                  onClick={() => {
+                    const baseName = fileType === '.py' ? 'script' : fileType === '.md' ? 'note' : 'document';
+                    let counter = 1;
+                    let newFileName = `${baseName}${counter}${fileType}`;
+                    while (files.includes(newFileName)) {
+                      counter++;
+                      newFileName = `${baseName}${counter}${fileType}`;
+                    }
+
+                    setFiles(prev => [...prev, newFileName]);
+                    setFileContents(prev => ({
+                      ...prev,
+                      [newFileName]: ''
+                    }));
+                    setSelectedFile(newFileName);
+                    setShowNewFileModal(false);
+                    setFileTypeSearch('');
+                  }}
+                  className="w-full text-left bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">
+                      {fileType === '.py' ? 'Python File' : fileType === '.md' ? 'Markdown File' : 'Text File'}
+                    </span>
+                    <span className="text-gray-400 text-sm">{fileType}</span>
+                  </div>
+                  <div className="text-gray-400 text-sm">
+                    {fileType === '.py' ? 'Python script with syntax highlighting' : fileType === '.md' ? 'Markdown with live preview' : 'Plain text document'}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex space-x-2">
+              <button
+                onClick={() => {
+                  setShowNewFileModal(false);
+                  setFileTypeSearch('');
+                }}
+                className="flex-1 bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
