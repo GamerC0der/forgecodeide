@@ -25,6 +25,22 @@ export default function Home() {
   const [pythonReplLines, setPythonReplLines] = useState<string[]>([]);
   const [pyodideReady, setPyodideReady] = useState(false);
   const [pyodideInstance, setPyodideInstance] = useState<any>(null);
+  const [files, setFiles] = useState<string[]>(['app.py']);
+  const [selectedFile, setSelectedFile] = useState<string>('app.py');
+  const [fileContents, setFileContents] = useState<Record<string, string>>({
+    'app.py': `print("Hello, World!")
+
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+for i in range(10):
+    print(f"F({i}) = {fibonacci(i)}")
+`
+  });
+  const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
+  const [renameInput, setRenameInput] = useState('');
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
@@ -89,20 +105,20 @@ export default function Home() {
   useEffect(() => {
     if (editorRef.current) {
       const startState = EditorState.create({
-        doc: `print("Hello, World!")
-
-def fibonacci(n):
-    if n <= 1:
-        return n
-    return fibonacci(n-1) + fibonacci(n-2)
-
-for i in range(10):
-    print(f"F({i}) = {fibonacci(i)}")
-`,
+        doc: fileContents[selectedFile] || '',
         extensions: [
           basicSetup,
           python(),
           oneDark,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              const newContent = update.state.doc.toString();
+              setFileContents(prev => ({
+                ...prev,
+                [selectedFile]: newContent
+              }));
+            }
+          }),
           EditorView.theme({
             "&": { height: "100%", width: "100%" },
             ".cm-scroller": { height: "100%" },
@@ -122,7 +138,19 @@ for i in range(10):
         editorViewRef.current = null;
       };
     }
-  }, []);
+  }, [selectedFile]);
+
+  useEffect(() => {
+    if (editorViewRef.current && selectedFile) {
+      const currentContent = editorViewRef.current.state.doc.toString();
+      const fileContent = fileContents[selectedFile] || '';
+      if (currentContent !== fileContent) {
+        editorViewRef.current.dispatch({
+          changes: { from: 0, to: currentContent.length, insert: fileContent }
+        });
+      }
+    }
+  }, [selectedFile, fileContents]);
 
   const executePythonCode = async (code: string): Promise<string> => {
     if (!pyodideReady || !pyodideInstance) {
@@ -255,9 +283,13 @@ sys.modules['builtins'].input = mock_input
     } else if (args.length === 2) {
       const fileName = args[1];
       if (fileName.endsWith('.py')) {
-        const editorContent = editorViewRef.current?.state.doc.toString() || '';
-        const result = await executePythonCode(editorContent);
-        return result.split('\n').filter(line => line.trim());
+        if (files.includes(fileName)) {
+          const fileContent = fileContents[fileName] || '';
+          const result = await executePythonCode(fileContent);
+          return result.split('\n').filter(line => line.trim());
+        } else {
+          return [`python: can't open file '${fileName}': No such file or directory`];
+        }
       } else {
         return [`python: can't open file '${fileName}': No such file or directory`];
       }
@@ -268,6 +300,52 @@ sys.modules['builtins'].input = mock_input
     }
 
     return ['python: invalid syntax or command'];
+  };
+
+  const handleRenameFile = (index: number) => {
+    setRenamingIndex(index);
+    setRenameInput(files[index]);
+  };
+
+  const handleConfirmRename = () => {
+    if (renamingIndex !== null && renameInput.trim()) {
+      const oldFileName = files[renamingIndex];
+      const newFileName = renameInput.trim();
+
+      const newFiles = [...files];
+      newFiles[renamingIndex] = newFileName;
+      setFiles(newFiles);
+
+      const newFileContents = { ...fileContents };
+      newFileContents[newFileName] = newFileContents[oldFileName];
+      delete newFileContents[oldFileName];
+      setFileContents(newFileContents);
+
+      if (selectedFile === oldFileName) {
+        setSelectedFile(newFileName);
+      }
+    }
+    setRenamingIndex(null);
+    setRenameInput('');
+  };
+
+  const handleCancelRename = () => {
+    setRenamingIndex(null);
+    setRenameInput('');
+  };
+
+  const handleDeleteFile = (index: number) => {
+    const fileToDelete = files[index];
+    setFiles(prev => prev.filter((_, i) => i !== index));
+
+    const newFileContents = { ...fileContents };
+    delete newFileContents[fileToDelete];
+    setFileContents(newFileContents);
+
+    if (selectedFile === fileToDelete) {
+      const remainingFiles = files.filter((_, i) => i !== index);
+      setSelectedFile(remainingFiles.length > 0 ? remainingFiles[0] : '');
+    }
   };
 
   const handleTerminalKeyPress = async (e: React.KeyboardEvent) => {
@@ -303,7 +381,7 @@ sys.modules['builtins'].input = mock_input
             setTerminalInput('');
             return;
           } else if (input === 'ls') {
-            output.push('app.py');
+            files.forEach(file => output.push(file));
           } else if (input === 'whoami') {
             output.push('forge');
           } else if (input === 'help') {
@@ -333,36 +411,113 @@ sys.modules['builtins'].input = mock_input
   };
 
   return (
-    <div ref={containerRef} className="h-screen w-screen flex flex-col">
-      <div ref={editorRef} className="flex-1" />
-      <div
-        className="bg-gray-700 hover:bg-gray-600 cursor-row-resize select-none flex items-center justify-center text-gray-400 text-xs"
-        style={{ height: '4px' }}
-        onMouseDown={handleMouseDown}
-      >
-        ⋯
-      </div>
-      <div
-        className="bg-black border-t border-gray-600 font-mono text-sm overflow-y-auto"
-        style={{ height: `${terminalHeight}px` }}
-      >
-        <div className="p-2 space-y-1">
-          {terminalHistory.map((line, index) => (
-            <div key={index} className="text-green-400">{line}</div>
+    <div className="h-screen w-screen flex flex-row">
+      <div className="w-64 bg-gray-800 border-r border-gray-600 flex flex-col">
+        <div className="p-4 border-b border-gray-600">
+          <h2 className="text-white text-lg font-semibold mb-2">Files</h2>
+          <button
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded"
+            onClick={() => {
+              const newFileName = `file${files.length + 1}.py`;
+              setFiles(prev => [...prev, newFileName]);
+              setFileContents(prev => ({
+                ...prev,
+                [newFileName]: ''
+              }));
+              setSelectedFile(newFileName);
+            }}
+          >
+            + New File
+          </button>
+        </div>
+        <div className="flex-1 p-2">
+          {files.map((file, index) => (
+            <div
+              key={index}
+              className={`text-sm py-1 px-2 hover:bg-gray-700 rounded cursor-pointer relative group ${
+                selectedFile === file ? 'bg-gray-700 text-white' : 'text-gray-300'
+              }`}
+              onClick={() => setSelectedFile(file)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+              }}
+            >
+              {renamingIndex === index ? (
+                <input
+                  type="text"
+                  value={renameInput}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmRename();
+                    if (e.key === 'Escape') handleCancelRename();
+                  }}
+                  onBlur={handleConfirmRename}
+                  className="bg-gray-600 text-white text-sm px-2 py-1 rounded w-full outline-none"
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <span>{file}</span>
+                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 flex space-x-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRenameFile(index);
+                      }}
+                      className="text-xs text-gray-400 hover:text-white"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFile(index);
+                      }}
+                      className="text-xs text-gray-400 hover:text-red-400"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           ))}
-          <div className="flex items-center">
-            <span className="text-green-400 mr-2">{isPythonRepl ? '>>>' : '$'}</span>
-            <input
-              ref={terminalRef}
-              type="text"
-              value={terminalInput}
-              onChange={(e) => setTerminalInput(e.target.value)}
-              onKeyPress={handleTerminalKeyPress}
-              className="flex-1 bg-transparent text-green-400 outline-none"
-              placeholder=""
-              autoFocus
-            />
-            <span className="text-green-400 animate-pulse">█</span>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col">
+        <div ref={containerRef} className="flex-1 flex flex-col">
+          <div ref={editorRef} className="flex-1" />
+          <div
+            className="bg-gray-700 hover:bg-gray-600 cursor-row-resize select-none flex items-center justify-center text-gray-400 text-xs"
+            style={{ height: '4px' }}
+            onMouseDown={handleMouseDown}
+          >
+            ⋯
+          </div>
+          <div
+            className="bg-black border-t border-gray-600 font-mono text-sm overflow-y-auto"
+            style={{ height: `${terminalHeight}px` }}
+          >
+            <div className="p-2 space-y-1">
+              {terminalHistory.map((line, index) => (
+                <div key={index} className="text-green-400">{line}</div>
+              ))}
+              <div className="flex items-center">
+                <span className="text-green-400 mr-2">{isPythonRepl ? '>>>' : '$'}</span>
+                <input
+                  ref={terminalRef}
+                  type="text"
+                  value={terminalInput}
+                  onChange={(e) => setTerminalInput(e.target.value)}
+                  onKeyPress={handleTerminalKeyPress}
+                  className="flex-1 bg-transparent text-green-400 outline-none"
+                  placeholder=""
+                  autoFocus
+                />
+                <span className="text-green-400 animate-pulse">█</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
