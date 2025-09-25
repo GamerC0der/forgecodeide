@@ -7,6 +7,7 @@ import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 
 
+
 const renderMarkdown = (text: string) => {
   const formatInline = (text: string) => {
     return text
@@ -37,11 +38,14 @@ const renderMarkdown = (text: string) => {
     });
 };
 
+const API_BASE_URL = '/api/proxy';
+
 export default function Home() {
   const editorRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
-  const [pythonOutput, setPythonOutput] = useState<string[]>([]);
-  const [showPythonOutput, setShowPythonOutput] = useState(false);
+  const [output, setOutput] = useState<string[]>([]);
+  const [showOutput, setShowOutput] = useState(false);
+  const [outputType, setOutputType] = useState<'python' | null>(null);
   const [files, setFiles] = useState<string[]>(['app.py']);
   const [selectedFile, setSelectedFile] = useState<string>('app.py');
   const [fileContents, setFileContents] = useState<Record<string, string>>({
@@ -63,6 +67,10 @@ for i in range(10):
   const [vmUuid, setVmUuid] = useState<string | null>(null);
   const [isCreatingVM, setIsCreatingVM] = useState(false);
   const [vmWasLoaded, setVmWasLoaded] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [activeView, setActiveView] = useState<'explorer' | 'plugins'>('explorer');
+  const [pluginSearch, setPluginSearch] = useState('');
 
   const createVM = useCallback(async () => {
     if (isCreatingVM) {
@@ -72,7 +80,7 @@ for i in range(10):
     try {
       setIsCreatingVM(true);
 
-      const response = await fetch('http://localhost:5000/vm', {
+      const response = await fetch(`${API_BASE_URL}/vm`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -164,27 +172,6 @@ for i in range(10):
   }, [selectedFile, fileContents]);
 
   useEffect(() => {
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch('http://localhost:5000/poll');
-        const data = await response.json();
-
-        if (vmUuid && !data.vms.includes(vmUuid)) {
-          setVmUuid(null);
-          localStorage.removeItem('forgecode_vm_uuid');
-          setVmWasLoaded(false);
-        }
-      } catch (error) {
-        console.error('Failed to poll VMs:', error);
-      }
-    }, 500);
-
-    return () => {
-      clearInterval(pollInterval);
-    };
-  }, [vmUuid]);
-
-  useEffect(() => {
     if (!vmUuid) {
       const storedVmUuid = localStorage.getItem('forgecode_vm_uuid');
       if (storedVmUuid) {
@@ -194,12 +181,25 @@ for i in range(10):
     }
   }, [vmUuid]);
 
+  // Close more menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showMoreMenu && !(event.target as Element).closest('.more-menu-container')) {
+        setShowMoreMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMoreMenu]);
+
   const executePythonCode = async (code: string): Promise<void> => {
-    setPythonOutput([]);
-    setShowPythonOutput(true);
+    setOutput([]);
+    setShowOutput(true);
+    setOutputType('python');
 
     try {
-      const response = await fetch(`http://localhost:5000/vm/default/python`, {
+      const response = await fetch(`${API_BASE_URL}/vm/default/python`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -210,13 +210,13 @@ for i in range(10):
       });
 
       if (!response.ok) {
-        setPythonOutput([`Error: ${response.status} ${response.statusText}`]);
+        setOutput([`Error: ${response.status} ${response.statusText}`]);
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        setPythonOutput(['Error: Unable to read response']);
+        setOutput(['Error: Unable to read response']);
         return;
       }
 
@@ -235,13 +235,13 @@ for i in range(10):
             const data = line.replace('data: ', '');
             if (data.trim()) {
               outputLines.push(data);
-              setPythonOutput([...outputLines]);
+              setOutput([...outputLines]);
             }
           }
         }
       }
     } catch (error: any) {
-      setPythonOutput([`Error: ${error.message}`]);
+      setOutput([`Error: ${error.message}`]);
     }
   };
 
@@ -250,19 +250,21 @@ for i in range(10):
     const args = command.trim().split(/\s+/);
 
     if (args.length === 1) {
-      setPythonOutput(['python: missing filename or -c option']);
-      setShowPythonOutput(true);
+      setOutput(['python: missing filename or -c option']);
+      setShowOutput(true);
+      setOutputType('python');
       return;
     } else if (args.length === 2) {
       const fileName = args[1];
       if (fileName.endsWith('.py')) {
         if (files.includes(fileName)) {
           const fileContent = fileContents[fileName] || '';
-          setPythonOutput([]);
-          setShowPythonOutput(true);
+          setOutput([]);
+          setShowOutput(true);
+          setOutputType('python');
 
           try {
-            const response = await fetch(`http://localhost:5000/vm/default/python`, {
+            const response = await fetch(`${API_BASE_URL}/vm/default/python`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -273,13 +275,13 @@ for i in range(10):
             });
 
             if (!response.ok) {
-              setPythonOutput([`Error: ${response.status} ${response.statusText}`]);
+              setOutput([`Error: ${response.status} ${response.statusText}`]);
               return;
             }
 
             const reader = response.body?.getReader();
             if (!reader) {
-              setPythonOutput(['Error: Unable to read response']);
+              setOutput(['Error: Unable to read response']);
               return;
             }
 
@@ -298,28 +300,31 @@ for i in range(10):
                   const data = line.replace('data: ', '');
                   if (data.trim()) {
                     outputLines.push(data);
-                    setPythonOutput([...outputLines]);
+                    setOutput([...outputLines]);
                   }
                 }
               }
             }
           } catch (error: any) {
-            setPythonOutput([`Error: ${error.message}`]);
+            setOutput([`Error: ${error.message}`]);
           }
         } else {
-          setPythonOutput([`python: can't open file '${fileName}': No such file or directory`]);
-          setShowPythonOutput(true);
+          setOutput([`python: can't open file '${fileName}': No such file or directory`]);
+          setShowOutput(true);
+          setOutputType('python');
         }
       } else {
-        setPythonOutput([`python: can't open file '${fileName}': No such file or directory`]);
-        setShowPythonOutput(true);
+        setOutput([`python: can't open file '${fileName}': No such file or directory`]);
+        setShowOutput(true);
+        setOutputType('python');
       }
     } else if (args[1] === '-c' && args.length > 2) {
       const code = args.slice(2).join(' ');
       await executePythonCode(code);
     } else {
-      setPythonOutput(['python: invalid syntax or command']);
-      setShowPythonOutput(true);
+      setOutput(['python: invalid syntax or command']);
+      setShowOutput(true);
+      setOutputType('python');
     }
   }, [files, fileContents]);
 
@@ -369,6 +374,13 @@ for i in range(10):
     }
   };
 
+  const handleClearAllFiles = () => {
+    setFiles([]);
+    setFileContents({});
+    setSelectedFile('');
+    setShowMoreMenu(false);
+  };
+
 
   return (
     <div className="h-screen w-screen flex flex-row relative">
@@ -377,86 +389,195 @@ for i in range(10):
           <div className="text-white text-xl font-semibold">Loading...</div>
         </div>
       )}
-      <div className="w-64 bg-gray-800 border-r border-gray-600 flex flex-col">
-        <div className="p-4 border-b border-gray-600">
-          <h2 className="text-white text-lg font-semibold mb-2">Files</h2>
-          <button
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded"
-            onClick={() => setShowNewFileModal(true)}
-          >
-            + New File
-          </button>
+      <div className="w-12 bg-gray-900 border-r border-gray-600 flex flex-col items-center py-2">
+        <div
+          className={`w-8 h-8 rounded hover:bg-gray-700 flex items-center justify-center cursor-pointer mb-2 group ${activeView === 'explorer' ? 'bg-gray-700' : ''}`}
+          onClick={() => {
+            setActiveView('explorer');
+            setShowSidebar(true);
+          }}
+          title="Explorer"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400 group-hover:text-white">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+          </svg>
         </div>
-        <div className="flex-1 p-2">
-          {files.map((file, index) => (
-            <div
-              key={index}
-              className={`text-sm py-1 px-2 hover:bg-gray-700 rounded cursor-pointer relative group ${
-                selectedFile === file ? 'bg-gray-700 text-white' : 'text-gray-300'
-              }`}
-              onClick={() => setSelectedFile(file)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-              }}
-            >
-              {renamingIndex === index ? (
-                <input
-                  type="text"
-                  value={renameInput}
-                  onChange={(e) => setRenameInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleConfirmRename();
-                    if (e.key === 'Escape') handleCancelRename();
-                  }}
-                  onBlur={handleConfirmRename}
-                  className="bg-gray-600 text-white text-sm px-2 py-1 rounded w-full outline-none"
-                  autoFocus
-                />
-              ) : (
-                <>
-                  <span>{file}</span>
-                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 flex space-x-1">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRenameFile(index);
-                      }}
-                      className="text-xs text-gray-400 hover:text-white"
-                    >
-                      ✏️
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteFile(index);
-                      }}
-                      className="text-xs text-gray-400 hover:text-red-400"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
+
+        <div
+          className={`w-8 h-8 rounded hover:bg-gray-700 flex items-center justify-center cursor-pointer mb-2 group ${activeView === 'plugins' ? 'bg-gray-700' : ''}`}
+          onClick={() => {
+            setActiveView('plugins');
+            setShowSidebar(true);
+          }}
+          title="Plugins"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400 group-hover:text-white">
+            <rect width="7" height="7" x="3" y="3" rx="1"/>
+            <rect width="7" height="7" x="14" y="3" rx="1"/>
+            <rect width="7" height="7" x="14" y="14" rx="1"/>
+            <rect width="7" height="7" x="3" y="14" rx="1"/>
+          </svg>
         </div>
       </div>
+
+      {showSidebar && (
+        <div className="w-64 bg-gray-800 border-r border-gray-600 flex flex-col">
+          {activeView === 'explorer' ? (
+            <>
+              <div className="px-4 py-2 border-b border-gray-700 bg-gray-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-300 text-xs font-medium uppercase tracking-wide">Explorer</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      className="w-6 h-6 rounded hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                      onClick={() => setShowNewFileModal(true)}
+                      title="New File"
+                    >
+                      <span className="text-sm">+</span>
+                    </button>
+                    <div className="relative more-menu-container">
+                      <button
+                        className="w-6 h-6 rounded hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                        onClick={() => setShowMoreMenu(!showMoreMenu)}
+                        title="More Actions"
+                      >
+                        <span className="text-xs">⋯</span>
+                      </button>
+
+                      {showMoreMenu && (
+                        <div className="absolute top-8 right-0 bg-gray-800 border border-gray-600 rounded shadow-lg z-50 min-w-32">
+                          <button
+                            onClick={handleClearAllFiles}
+                            className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                          >
+                            Clear All
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                <div className="px-2 py-1">
+                  {files.map((file, index) => (
+                    <div
+                      key={index}
+                      className={`text-sm py-1 px-2 hover:bg-gray-700 rounded cursor-pointer relative group transition-colors ${
+                        selectedFile === file ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white'
+                      }`}
+                      onClick={() => setSelectedFile(file)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                      }}
+                    >
+                      {renamingIndex === index ? (
+                        <input
+                          type="text"
+                          value={renameInput}
+                          onChange={(e) => setRenameInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleConfirmRename();
+                            if (e.key === 'Escape') handleCancelRename();
+                          }}
+                          onBlur={handleConfirmRename}
+                          className="bg-gray-600 text-white text-sm px-2 py-1 rounded w-full outline-none"
+                          autoFocus
+                        />
+                      ) : (
+                        <>
+                          <span className="truncate">{file}</span>
+                          <div className="absolute right-1 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 flex">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRenameFile(index);
+                              }}
+                              className="w-6 h-6 rounded hover:bg-gray-600 flex items-center justify-center text-gray-400 hover:text-white"
+                              title="Rename"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                <path d="m18.5 2.5 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                              </svg>
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteFile(index);
+                              }}
+                              className="w-6 h-6 rounded hover:bg-gray-600 flex items-center justify-center text-gray-400 hover:text-red-400"
+                              title="Delete"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 6h18"/>
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="px-4 py-2 border-t border-gray-700 bg-gray-800">
+                <div className="flex items-center justify-between text-xs text-gray-400">
+                  <span>{files.length} files</span>
+                  <span>UTF-8</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="px-4 py-2 border-b border-gray-700 bg-gray-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-300 text-xs font-medium uppercase tracking-wide">Plugins</span>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-4">
+                  <div className="mb-4">
+                    <input
+                      type="text"
+                      placeholder="Search plugins..."
+                      value={pluginSearch}
+                      onChange={(e) => setPluginSearch(e.target.value)}
+                      className="w-full bg-gray-700 text-white rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="text-center py-8">
+                    <div className="text-gray-500 text-sm">No plugins installed</div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col">
         <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-600">
           <span className="text-white text-sm font-medium">{selectedFile}</span>
-          <button
-            onClick={async () => {
-              if (selectedFile && selectedFile.endsWith('.py')) {
-                const code = fileContents[selectedFile] || '';
-                await executePythonCode(code);
-              }
-            }}
-            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm flex items-center gap-2"
-            disabled={!selectedFile || !selectedFile.endsWith('.py')}
-          >
-            ▶️ Run Python
-          </button>
+          {selectedFile && !selectedFile.endsWith('.md') && !selectedFile.endsWith('.txt') && (
+            <button
+              onClick={async () => {
+                if (selectedFile && selectedFile.endsWith('.py')) {
+                  const code = fileContents[selectedFile] || '';
+                  await executePythonCode(code);
+                }
+              }}
+              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm flex items-center gap-2"
+              disabled={!selectedFile || !selectedFile.endsWith('.py')}
+            >
+              ▶️ Run Python
+            </button>
+          )}
         </div>
         <div className="flex-1 flex flex-col">
           {selectedFile.endsWith('.md') ? (
@@ -470,19 +591,19 @@ for i in range(10):
             <div ref={editorRef} className="flex-1" />
           )}
 
-          {showPythonOutput && (
+          {showOutput && (
             <div className="absolute bottom-0 left-0 right-0 bg-black border-t border-gray-600 font-mono text-sm max-h-64 overflow-y-auto z-40">
               <div className="p-2 space-y-1">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-green-400 text-xs">Python Output</span>
+                  <span className="text-xs text-green-400">Python Output</span>
                   <button
-                    onClick={() => setShowPythonOutput(false)}
+                    onClick={() => setShowOutput(false)}
                     className="text-gray-400 hover:text-white text-xs"
                   >
                     ✕
                   </button>
                 </div>
-                {pythonOutput.map((line, index) => (
+                {output.map((line, index) => (
                   <div key={index} className="text-green-400">{line}</div>
                 ))}
               </div>
